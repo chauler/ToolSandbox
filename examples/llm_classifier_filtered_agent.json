@@ -1,0 +1,10 @@
+{
+    "type": "tool_filtered",
+    "inner_agent": "GPT_4_o_2024_05_13",
+    "tool_filter": {
+        "type": "llm_classifier",
+        "model_name": "gpt-4o-mini",
+        "always_include": ["end_conversation"],
+        "max_tools": 8
+    }
+}

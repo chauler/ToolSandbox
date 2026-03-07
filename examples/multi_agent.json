@@ -1,0 +1,25 @@
+{
+    "type": "multi_agent",
+    "agents": {
+        "planner": {
+            "type": "GPT_4_o_2024_05_13"
+        },
+        "executor": {
+            "type": "tool_filtered",
+            "inner_agent": "Claude_3_Haiku",
+            "tool_filter": {
+                "type": "llm_classifier",
+                "model_name": "gpt-4o-mini",
+                "always_include": ["end_conversation"]
+            }
+        }
+    },
+    "router": {
+        "type": "llm",
+        "model_name": "gpt-4o-mini",
+        "agent_descriptions": {
+            "planner": "General-purpose agent that plans task execution, asks clarifying questions, and communicates with the user",
+            "executor": "Specialist agent with filtered tool access for executing specific tool calls"
+        }
+    }
+}

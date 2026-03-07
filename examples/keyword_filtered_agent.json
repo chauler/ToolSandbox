@@ -1,0 +1,54 @@
+{
+    "type": "tool_filtered",
+    "inner_agent": "GPT_4_o_2024_05_13",
+    "tool_filter": {
+        "type": "keyword",
+        "keyword_to_tools": {
+            "(message|send|text)": [
+                "send_message_with_phone_number",
+                "search_messages"
+            ],
+            "(contact|person|who)": [
+                "search_contacts",
+                "add_contact",
+                "modify_contact",
+                "remove_contact"
+            ],
+            "(remind|alarm|timer|schedule)": [
+                "add_reminder",
+                "modify_reminder",
+                "remove_reminder",
+                "search_reminder"
+            ],
+            "(wifi|cellular|setting|location|battery)": [
+                "get_wifi_status",
+                "set_wifi_status",
+                "get_cellular_service_status",
+                "set_cellular_service_status",
+                "get_current_location"
+            ],
+            "(time|date|hour|minute|timestamp|convert|unit)": [
+                "get_current_timestamp",
+                "timestamp_to_datetime_info",
+                "datetime_info_to_timestamp",
+                "shift_timestamp",
+                "timestamp_diff",
+                "seconds_to_hours_minutes_seconds",
+                "unit_conversion"
+            ],
+            "(weather|stock|search|currency|holiday|dictionary)": [
+                "search_weather_around_lat_lon",
+                "search_stock",
+                "convert_currency",
+                "search_holiday",
+                "search_dictionary",
+                "search_lat_lon",
+                "search_location_around_lat_lon",
+                "search_point_of_interest_around_lat_lon",
+                "knowledge_base_question_answering"
+            ]
+        },
+        "default_tools": ["end_conversation"],
+        "include_unmatched": false
+    }
+}

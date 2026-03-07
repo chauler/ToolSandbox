@@ -26,6 +26,7 @@ from tool_sandbox.cli.utils import (
     get_necessary_tool_name_to_scenario_count,
     resolve_scenarios,
     run_scenario,
+    run_scenario_with_config,
 )
 from tool_sandbox.common.execution_context import ScenarioCategories
 from tool_sandbox.common.scenario import Scenario
@@ -95,25 +96,30 @@ def run_sandbox(
     name_to_scenario: dict[str, Scenario],
     processes: int,
     output_base_dir: Path,
+    agent_config: Optional[dict[str, Any]] = None,
 ) -> None:
     """Entry point for Tool Sandbox
 
     Args:
-        agent_type:       The agent type to use.
+        agent_type:       The agent type to use (ignored when *agent_config* is set).
         user_type:        The user type to use.
         name_to_scenario: Dictionary from scenario name to scenario definition.
         processes:        Number of processes to run in parallel.
         output_base_dir:  Base directory for model outputs.
-
+        agent_config:     Optional JSON config dict for complex agent topologies
+                          (tool-filtered, multi-agent, etc.).  When provided,
+                          *agent_type* is ignored.
     """
     # Show all rows and all columns when converting polars dataframes to strings.
-    # Sadly, there is no way to specify an unlimited format length for strings. Note
-    # that for tracebacks or long explanations from Claude 3 Opus a value of `1000` was
-    # insufficient.
     pl.Config.set_tbl_rows(-1).set_tbl_cols(-1).set_fmt_str_lengths(10000)
     pl.Config.set_tbl_formatting("ASCII_FULL")
 
-    agent = AGENT_TYPE_TO_FACTORY[agent_type]()
+    if agent_config is not None:
+        from tool_sandbox.cli.agent_config import build_agent_from_config
+
+        agent = build_agent_from_config(agent_config)
+    else:
+        agent = AGENT_TYPE_TO_FACTORY[agent_type]()
     user = USER_TYPE_TO_FACTORY[user_type]()
     output_directory = (
         Path(output_base_dir) / f"agent_{getattr(agent, 'model_name', agent_type)}_"
@@ -155,35 +161,35 @@ def run_sandbox(
     name_and_scenario_list = list(name_to_scenario.items())
     random.shuffle(name_and_scenario_list)
     num_scenarios = len(name_and_scenario_list)
+
+    # Choose the correct run_scenario variant depending on whether a config
+    # was provided.  For the config path we use ``run_scenario_with_config``
+    # which rebuilds the agent from the serialisable config dict inside each
+    # worker (required for multiprocessing which pickles arguments).
+    if agent_config is not None:
+        _run_fn = partial(
+            run_scenario_with_config,
+            agent_config=agent_config,
+            user_type=user_type,
+            output_directory=output_directory,
+        )
+    else:
+        _run_fn = partial(
+            run_scenario,
+            agent_type=agent_type,
+            user_type=user_type,
+            output_directory=output_directory,
+        )
+
     if processes > 1 and num_scenarios > 1:
-        # As described in e.g. https://stackoverflow.com/a/66113051 the default option
-        # for starting a process is to fork the parent process, which by design can
-        # cause dead locks. We have seen such dead locks when running the tool sandbox
-        # on Linux, but not on MacOS. Switching to the `spawn` instead of `fork` method
-        # for starting a new process eliminated the deadlock.
         mpctx = multiprocessing.get_context("spawn")
         with mpctx.Pool(min(processes, num_scenarios)) as pool:
-            result_summary = pool.map(
-                partial(
-                    run_scenario,
-                    agent_type=agent_type,
-                    user_type=user_type,
-                    output_directory=output_directory,
-                ),
-                name_and_scenario_list,
-            )
+            result_summary = pool.map(_run_fn, name_and_scenario_list)
     else:
         result_summary = []
         tqdm_iterator = tqdm(name_and_scenario_list, desc="Scenarios")
         for name_and_scenario in tqdm_iterator:
-            result_summary.append(
-                run_scenario(
-                    name_and_scenario,
-                    agent_type=agent_type,
-                    user_type=user_type,
-                    output_directory=output_directory,
-                )
-            )
+            result_summary.append(_run_fn(name_and_scenario))
 
     # Aggregate results by category
     category_summary = get_category_summary(result_summary)
@@ -197,11 +203,23 @@ def run_sandbox(
 def main() -> None:
     random.seed(42)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    agent_selection_group = parser.add_mutually_exclusive_group()
+    agent_selection_group.add_argument(
         "--agent",
-        help="Agent type.",
-        default="GPT_4_o_2024_05_13",
+        help="Agent type (simple enum-based selection).",
+        default=None,
         choices=[str(t) for t in AGENT_TYPE_TO_FACTORY.keys()],
+    )
+    agent_selection_group.add_argument(
+        "--agent_config",
+        help=(
+            "Path to a JSON file describing the agent configuration. "
+            "Supports tool-filtered agents, multi-agent ensembles, and "
+            "nested compositions. See tool_sandbox/cli/agent_config.py for "
+            "the configuration format. Mutually exclusive with --agent."
+        ),
+        type=Path,
+        default=None,
     )
     parser.add_argument(
         "--user",
@@ -254,9 +272,20 @@ def main() -> None:
         desired_scenario_names=scenario_names,
         preferred_tool_backend=args.preferred_tool_backend,
     )
-    # Technically, strings can automatically be converted to the `RoleImplType` since it
-    # is a `StrEnum`, but we are being explicit here.
-    agent_type = RoleImplType(args.agent)
+
+    # Resolve agent configuration: either from --agent_config JSON file or
+    # the --agent enum (defaulting to GPT_4_o_2024_05_13 when neither given).
+    agent_config: Optional[dict[str, Any]] = None
+    if args.agent_config is not None:
+        with open(args.agent_config, "r", encoding="utf-8") as f:
+            agent_config = json.load(f)
+        # agent_type is unused when agent_config is set, but run_sandbox still
+        # requires it as a parameter for the non-config path.
+        agent_type = RoleImplType.GPT_4_o_2024_05_13
+    else:
+        agent_type_str = args.agent or "GPT_4_o_2024_05_13"
+        agent_type = RoleImplType(agent_type_str)
+
     user_type = RoleImplType(args.user)
     run_sandbox(
         agent_type=agent_type,
@@ -264,6 +293,7 @@ def main() -> None:
         name_to_scenario=name_to_scenario,
         processes=args.parallel,
         output_base_dir=args.output_dir,
+        agent_config=agent_config,
     )
 
 

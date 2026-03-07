@@ -2,8 +2,10 @@
 # Copyright (C) 2024 Apple Inc. All Rights Reserved.
 """Base class for all Roles"""
 
+from __future__ import annotations
+
 from logging import getLogger
-from typing import Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 import attrs
 import polars as pl
@@ -15,6 +17,9 @@ from tool_sandbox.common.execution_context import (
 )
 from tool_sandbox.common.message_conversion import Message
 
+if TYPE_CHECKING:
+    from tool_sandbox.roles.tool_filter import ToolFilter
+
 LOGGER = getLogger(__name__)
 
 
@@ -23,9 +28,16 @@ class BaseRole:
     A role could be a dialog agent, a user simulator, a code execution environment and more.
 
     At this point roles are designed to be stateless. State representations are stored in execution context database
+
+    Attributes:
+        _tool_filter:   Optional tool filter to apply when getting available tools.
+                        If set, the filter's ``filter_tools`` method is called after
+                        the standard tool visibility logic, allowing per-agent
+                        customisation of which tools are exposed to the model.
     """
 
     role_type: Optional[RoleType] = None
+    _tool_filter: Optional[ToolFilter] = None
 
     @staticmethod
     def get_messages(ending_index: Optional[int] = None) -> list[Message]:
@@ -108,17 +120,31 @@ class BaseRole:
             if cls.role_type in cast(list[RoleType], message.visible_to)
         ]
 
-    @classmethod
-    def get_available_tools(cls) -> dict[str, Callable[..., Any]]:
-        """Get the available tools for this role."""
+    def get_available_tools(self) -> dict[str, Callable[..., Any]]:
+        """Get the available tools for this role.
+
+        If a ``_tool_filter`` is attached to this role instance, the filter is applied
+        after the standard visibility-based filtering.  This allows individual agent
+        instances to customise which tools they see without changing the global
+        execution context or tool registration.
+
+        Returns:
+            A dict mapping (agent-facing) tool name to callable.
+        """
         name_to_tool = get_current_context().get_available_tools(
-            scrambling_allowed=cls.role_type == RoleType.AGENT
+            scrambling_allowed=self.role_type == RoleType.AGENT
         )
-        return {
+        tools = {
             name: tool
             for name, tool in name_to_tool.items()
-            if cls.role_type in getattr(tool, "visible_to", (RoleType.AGENT,))
+            if self.role_type in getattr(tool, "visible_to", (RoleType.AGENT,))
         }
+        # Apply optional per-instance tool filter
+        tool_filter = getattr(self, "_tool_filter", None)
+        if tool_filter is not None:
+            messages = self.get_messages()
+            tools = tool_filter.filter_tools(tools, messages)
+        return tools
 
     def reset(self) -> None:
         """Reset any state of the agent."""

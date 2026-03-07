@@ -1,5 +1,6 @@
 # For licensing see accompanying LICENSE file.
 # Copyright (C) 2024 Apple Inc. All Rights Reserved.
+import json
 import traceback
 from collections import Counter, defaultdict
 from enum import auto
@@ -108,6 +109,75 @@ TEST_SCENARIO_NAMES = [
     # "remove_contact_by_phone_multiple_user_turn",
     # "find_temperature_f_with_location_and_time_diff_multiple_user_turn",
 ]
+
+
+def run_scenario_with_config(
+    name_and_scenario: tuple[str, Scenario],
+    *,
+    agent_config: dict[str, Any],
+    user_type: RoleImplType,
+    output_directory: Path,
+) -> dict[str, Any]:
+    """Play and evaluate a scenario using a JSON agent configuration.
+
+    This is the config-file counterpart of :func:`run_scenario`.  Instead of
+    an ``agent_type`` enum, it accepts an arbitrary agent configuration dict
+    that is resolved by :func:`~tool_sandbox.cli.agent_config.build_agent_from_config`.
+
+    Args:
+        name_and_scenario: Scenario name and Scenario object.
+        agent_config:      Agent configuration dict (as loaded from JSON).
+        user_type:         User type.
+        output_directory:  Directory to write output into.
+
+    Returns:
+        Evaluation info dict.
+    """
+    from tool_sandbox.cli.agent_config import build_agent_from_config
+
+    name, scenario = name_and_scenario
+    agent = build_agent_from_config(agent_config)
+    roles = {
+        RoleType.USER: USER_TYPE_TO_FACTORY[user_type](),
+        RoleType.EXECUTION_ENVIRONMENT: ExecutionEnvironment(),
+        RoleType.AGENT: agent,
+    }
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = scenario.play_and_evaluate(
+            roles=roles,
+            output_directory=output_directory,
+            scenario_name=name,
+        )
+        return {
+            "name": name,
+            "categories": scenario.categories,
+            "traceback": None,
+            "exception_type": None,
+            "milestone_similarity": result.evaluation_result.milestone_similarity,
+            "minefield_similarity": result.evaluation_result.minefield_similarity,
+            "similarity": result.evaluation_result.similarity,
+            "turn_count": result.evaluation_result.turn_count,
+            "milestone_mapping": result.evaluation_result.milestone_mapping,
+            "minefield_mapping": result.evaluation_result.minefield_mapping,
+        }
+    except Exception as e:
+        return {
+            "name": name,
+            "categories": scenario.categories,
+            "traceback": traceback.format_exc(),
+            "exception_type": type(e).__name__,
+            "milestone_similarity": 0,
+            "minefield_similarity": 0,
+            "similarity": 0,
+            "turn_count": scenario.max_messages,
+            "milestone_mapping": {},
+            "minefield_mapping": {},
+        }
+    finally:
+        for role in roles.values():
+            role.teardown()
 
 
 def resolve_scenarios(
