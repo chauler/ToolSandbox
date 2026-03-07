@@ -1,0 +1,98 @@
+# =============================================================================
+# ToolSandbox + Ollama — Reproducible Benchmark Environment
+# =============================================================================
+#
+# Usage:
+#   docker compose up --build              # run default test scenarios
+#   docker compose up --build -d           # run detached
+#   docker compose logs -f toolsandbox     # follow benchmark output
+#
+# Override scenarios via environment:
+#   SCENARIOS="wifi_off"               docker compose up --build
+#   SCENARIOS="wifi_off cellular_off"  docker compose up --build
+#   SCENARIOS="all"                    docker compose up --build   # full suite (1032 scenarios)
+#   SCENARIOS="test"                   docker compose up --build   # default — 3 test scenarios
+#
+# Override the model:
+#   OLLAMA_MODEL="qwen2.5:7b"         docker compose up --build
+#
+# Results appear in ./data/ on the host.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM inference server
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: toolsandbox-ollama
+    volumes:
+      # Persist downloaded models across runs
+      - ollama_data:/root/.ollama
+    # Inline entrypoint avoids Windows CRLF issues with mounted scripts.
+    # Uses bash /dev/tcp instead of curl (which is not installed in the ollama image).
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Starting Ollama server ..."
+        ollama serve &
+        SERVER_PID=$$!
+        echo "Waiting for Ollama to listen ..."
+        for i in $$(seq 1 120); do
+          if (echo > /dev/tcp/localhost/11434) 2>/dev/null; then
+            echo "Ollama is ready."
+            break
+          fi
+          sleep 1
+        done
+        echo "Pulling model $${OLLAMA_MODEL} ..."
+        ollama pull "$${OLLAMA_MODEL}"
+        echo "Model $${OLLAMA_MODEL} is ready."
+        touch /tmp/ollama-ready
+        wait $$SERVER_PID
+    environment:
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
+    ports:
+      - "11434:11434"
+    healthcheck:
+      # Only healthy once the model has been fully pulled (sentinel file exists).
+      # Uses bash /dev/tcp since curl is NOT installed in the ollama image.
+      test: ["CMD-SHELL", "test -f /tmp/ollama-ready && bash -c 'echo > /dev/tcp/localhost/11434' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+      start_period: 15s
+    # Uncomment the following for GPU acceleration (requires NVIDIA Container Toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # ToolSandbox — benchmark runner
+  # ---------------------------------------------------------------------------
+  toolsandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: toolsandbox-runner
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
+      SCENARIOS: "${SCENARIOS:-test}"
+      PARALLEL: "${PARALLEL:-1}"
+      OUTPUT_DIR: "/app/data"
+      OPENAI_API_KEY: "unused"
+    volumes:
+      # Mount the results directory back to the host
+      - ./data:/app/data
+
+volumes:
+  ollama_data:

@@ -43,13 +43,15 @@ def get_git_sha() -> Optional[str]:
     # `HEAD` for me.
     try:
         return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            )
             .decode("ascii")
             .strip()
         )
-    except subprocess.CalledProcessError:
-        # The tool sandbox script was not executed from within the git repository so we
-        # cannot figure out the git SHA.
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # The tool sandbox script was not executed from within the git repository
+        # (or git is not installed) so we cannot figure out the git SHA.
         return None
 
 
@@ -58,7 +60,10 @@ def has_local_changes() -> bool:
     # there are no local changes. The `--quiet` suppresses printing to stdout. Note that
     # this approach does not detect untracked files, but this should be fine for our
     # purposes.
-    completed_proc = subprocess.run(["git", "diff", "--exit-code", "--quiet"])
+    completed_proc = subprocess.run(
+        ["git", "diff", "--exit-code", "--quiet"],
+        stderr=subprocess.DEVNULL,
+    )
     return completed_proc.returncode == 1
 
 

@@ -1,0 +1,12 @@
+# Ignore things that shouldn't end up in the Docker build context
+.venv/
+.git/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+data/
+*.pyc
+*.pyo
+.mypy_cache/
+.ruff_cache/
+uv.lock
