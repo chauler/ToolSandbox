@@ -121,9 +121,12 @@ def run_sandbox(
     else:
         agent = AGENT_TYPE_TO_FACTORY[agent_type]()
     user = USER_TYPE_TO_FACTORY[user_type]()
+    # Sanitize model names for use in directory paths (e.g. ':' is invalid on Windows)
+    agent_label = str(getattr(agent, 'model_name', agent_type)).replace(':', '-')
+    user_label = str(getattr(user, 'model_name', user_type)).replace(':', '-')
     output_directory = (
-        Path(output_base_dir) / f"agent_{getattr(agent, 'model_name', agent_type)}_"
-        f"user_{getattr(user, 'model_name', user_type)}_"
+        Path(output_base_dir) / f"agent_{agent_label}_"
+        f"user_{user_label}_"
         f"{datetime.datetime.now().strftime('%m_%d_%Y_%H_%M_%S')}"
     )
     print(f"Storing outputs to '{output_directory}'.")

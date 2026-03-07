@@ -29,6 +29,8 @@ from tool_sandbox.roles.gemini_agent import GeminiAgent
 from tool_sandbox.roles.gorilla_api_agent import GorillaAPIAgent
 from tool_sandbox.roles.hermes_api_agent import HermesAPIAgent
 from tool_sandbox.roles.mistral_api_agent import MistralOpenAIServerAgent
+from tool_sandbox.roles.ollama_agent import OllamaAgent
+from tool_sandbox.roles.ollama_user import OllamaUser
 from tool_sandbox.roles.openai_api_agent import (
     GPT_3_5_0125_Agent,
     GPT_4_0125_Agent,
@@ -61,6 +63,7 @@ class RoleImplType(StrEnum):
     Cohere_Command_R = auto()
     Cohere_Command_R_Plus = auto()
     Unhelpful = auto()
+    Ollama = auto()
 
 
 AGENT_TYPE_TO_FACTORY: dict[RoleImplType, Callable[..., BaseRole]] = {
@@ -92,6 +95,7 @@ AGENT_TYPE_TO_FACTORY: dict[RoleImplType, Callable[..., BaseRole]] = {
         model_name="CohereForAI/c4ai-command-r-plus"
     ),
     RoleImplType.Unhelpful: UnhelpfulAgent,
+    RoleImplType.Ollama: lambda: OllamaAgent(model_name="qwen2.5:3b"),
 }
 
 USER_TYPE_TO_FACTORY: dict[RoleImplType, Callable[..., BaseRole]] = {
@@ -99,6 +103,7 @@ USER_TYPE_TO_FACTORY: dict[RoleImplType, Callable[..., BaseRole]] = {
     RoleImplType.GPT_4_0125: GPT_4_0125_User,
     RoleImplType.GPT_4_o_2024_05_13: GPT_4_o_2024_05_13_User,
     RoleImplType.Cli: CliUser,
+    RoleImplType.Ollama: lambda: OllamaUser(model_name="qwen2.5:3b"),
 }
 
 # The scenarios to play back when the `--test_mode` flag is set.
