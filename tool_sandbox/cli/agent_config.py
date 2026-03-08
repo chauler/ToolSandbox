@@ -86,6 +86,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tool_sandbox.roles.agent_framework_agent import AgentFrameworkAgent
 from tool_sandbox.roles.base_role import BaseRole
 from tool_sandbox.roles.multi_agent import (
     AgentRouter,
@@ -104,6 +105,17 @@ from tool_sandbox.roles.tool_filter import (
     ToolFilter,
 )
 from tool_sandbox.roles.tool_filtered_agent import ToolFilteredAgent
+from tool_sandbox.roles.tool_serializer import (
+    CompactDescriptionSerializer,
+    CompositeToolSerializer,
+    DescriptionPrefixSerializer,
+    IdentityToolSerializer,
+    JSONSchemaAnnotationSerializer,
+    MinimalSchemaSerializer,
+    ToolSerializer,
+    XMLToolSerializer,
+)
+from tool_sandbox.roles.tool_serialized_agent import ToolSerializedAgent
 
 
 def _build_tool_filter(config: dict[str, Any]) -> ToolFilter:
@@ -151,6 +163,56 @@ def _build_tool_filter(config: dict[str, Any]) -> ToolFilter:
         return CompositeToolFilter(filters=sub_filters)
 
     raise ValueError(f"Unknown tool filter type: '{filter_type}'")
+
+
+def _build_tool_serializer(config: dict[str, Any]) -> ToolSerializer:
+    """Construct a :class:`ToolSerializer` from a JSON config dict.
+
+    Args:
+        config: Dictionary with a ``"type"`` key and type-specific parameters.
+
+    Returns:
+        A :class:`ToolSerializer` instance.
+
+    Raises:
+        ValueError: If the type is unknown.
+    """
+    ser_type = config["type"]
+
+    if ser_type == "identity":
+        return IdentityToolSerializer()
+
+    if ser_type == "compact_description":
+        return CompactDescriptionSerializer(
+            max_tool_desc_length=config.get("max_tool_desc_length", 80),
+            max_param_desc_length=config.get("max_param_desc_length", 60),
+            ellipsis_marker=config.get("ellipsis_marker", "..."),
+        )
+
+    if ser_type == "minimal_schema":
+        return MinimalSchemaSerializer(
+            keep_tool_description=config.get("keep_tool_description", True),
+            keep_param_types=config.get("keep_param_types", True),
+        )
+
+    if ser_type == "json_schema_annotation":
+        return JSONSchemaAnnotationSerializer(
+            annotations=config["annotations"],
+        )
+
+    if ser_type == "description_prefix":
+        return DescriptionPrefixSerializer(
+            prefix=config["prefix"],
+        )
+
+    if ser_type == "xml":
+        return XMLToolSerializer()
+
+    if ser_type == "composite":
+        sub_serializers = [_build_tool_serializer(sc) for sc in config["serializers"]]
+        return CompositeToolSerializer(serializers=sub_serializers)
+
+    raise ValueError(f"Unknown tool serializer type: '{ser_type}'")
 
 
 def _build_router(config: dict[str, Any]) -> AgentRouter:
@@ -225,6 +287,18 @@ def build_agent_from_config(config: dict[str, Any]) -> BaseRole:
         tool_filter = _build_tool_filter(config["tool_filter"])
         return ToolFilteredAgent(inner_agent=inner_agent, tool_filter=tool_filter)
 
+    # --- Tool-serialized agent ---
+    if agent_type == "tool_serialized":
+        inner_config = config["inner_agent"]
+        if isinstance(inner_config, str):
+            inner_agent = _build_simple_agent(inner_config)
+        else:
+            inner_agent = build_agent_from_config(inner_config)
+        tool_serializer = _build_tool_serializer(config["tool_serializer"])
+        return ToolSerializedAgent(
+            inner_agent=inner_agent, tool_serializer=tool_serializer
+        )
+
     # --- Multi-agent ---
     if agent_type == "multi_agent":
         agents: dict[str, BaseRole] = {}
@@ -235,6 +309,14 @@ def build_agent_from_config(config: dict[str, Any]) -> BaseRole:
                 agents[name] = build_agent_from_config(agent_cfg)
         router = _build_router(config["router"])
         return MultiAgentRole(agents=agents, router=router)
+
+    if agent_type == "agent_framework":
+        inner_config = config["inner_agent"]
+        if isinstance(inner_config, str):
+            inner_agent = _build_simple_agent(inner_config)
+        else:
+            inner_agent = build_agent_from_config(inner_config)
+        return AgentFrameworkAgent(inner_agent=inner_agent)
 
     # --- Plain agent (by RoleImplType name) ---
     return _build_simple_agent(agent_type)

@@ -19,6 +19,7 @@ from tool_sandbox.common.message_conversion import Message
 
 if TYPE_CHECKING:
     from tool_sandbox.roles.tool_filter import ToolFilter
+    from tool_sandbox.roles.tool_serializer import ToolSerializer
 
 LOGGER = getLogger(__name__)
 
@@ -30,14 +31,20 @@ class BaseRole:
     At this point roles are designed to be stateless. State representations are stored in execution context database
 
     Attributes:
-        _tool_filter:   Optional tool filter to apply when getting available tools.
-                        If set, the filter's ``filter_tools`` method is called after
-                        the standard tool visibility logic, allowing per-agent
-                        customisation of which tools are exposed to the model.
+        _tool_filter:       Optional tool filter to apply when getting available tools.
+                            If set, the filter's ``filter_tools`` method is called after
+                            the standard tool visibility logic, allowing per-agent
+                            customisation of which tools are exposed to the model.
+        _tool_serializer:   Optional tool serializer to apply when converting tools to
+                            the OpenAI JSON schema format.  If set, the serializer's
+                            ``serialize_tools`` method is called after
+                            ``convert_to_openai_tools``, allowing per-agent customisation
+                            of how tools are presented to the model.
     """
 
     role_type: Optional[RoleType] = None
     _tool_filter: Optional[ToolFilter] = None
+    _tool_serializer: Optional[ToolSerializer] = None
 
     @staticmethod
     def get_messages(ending_index: Optional[int] = None) -> list[Message]:
@@ -145,6 +152,34 @@ class BaseRole:
             messages = self.get_messages()
             tools = tool_filter.filter_tools(tools, messages)
         return tools
+
+    def serialize_tools(
+        self, tools: dict[str, Callable[..., Any]]
+    ) -> list[dict[str, Any]]:
+        """Convert Python callables to OpenAI-format tool dicts, optionally
+        applying a :class:`~tool_sandbox.roles.tool_serializer.ToolSerializer`.
+
+        This is the single entry-point that agent ``respond()`` methods should
+        use instead of calling
+        :func:`~tool_sandbox.common.tool_conversion.convert_to_openai_tools`
+        directly.  When ``_tool_serializer`` is set on this instance the
+        serializer's :meth:`serialize_tools` is applied after the standard
+        conversion.
+
+        Args:
+            tools: Dict mapping tool name to callable (as returned by
+                   :meth:`get_available_tools`).
+
+        Returns:
+            A list of OpenAI-format tool dicts.
+        """
+        from tool_sandbox.common.tool_conversion import convert_to_openai_tools
+
+        openai_tools = convert_to_openai_tools(tools)
+        tool_serializer = getattr(self, "_tool_serializer", None)
+        if tool_serializer is not None:
+            openai_tools = tool_serializer.serialize_tools(openai_tools)
+        return openai_tools
 
     def reset(self) -> None:
         """Reset any state of the agent."""

@@ -257,7 +257,7 @@ class MistralAgent(BaseRole):
         available_tools = self.get_available_tools()
         available_tool_names = set(available_tools.keys())
         openai_tools = (
-            convert_to_openai_tools(available_tools)
+            self.serialize_tools(available_tools)
             if messages[-1].sender == RoleType.USER
             or messages[-1].sender == RoleType.EXECUTION_ENVIRONMENT
             else NOT_GIVEN
