@@ -1,5 +1,5 @@
 # =============================================================================
-# ToolSandbox + Ollama — Reproducible Benchmark Environment
+# ToolSandbox + Ollama + ML Classifier — Reproducible Benchmark Environment
 # =============================================================================
 #
 # Usage:
@@ -15,6 +15,9 @@
 #
 # Override the model:
 #   OLLAMA_MODEL="qwen2.5:7b"         docker compose up --build
+#
+# Use an agent config (e.g. with ML classifier filter):
+#   AGENT_CONFIG="configs/ml_classifier_filter.json"  docker compose up --build
 #
 # Results appear in ./data/ on the host.
 # =============================================================================
@@ -73,6 +76,26 @@ services:
     #           capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
+  # ML Classifier — tool-relevance prediction micro-service
+  # ---------------------------------------------------------------------------
+  classifier:
+    build:
+      context: ../tool_classifier
+      dockerfile: Dockerfile
+    container_name: toolsandbox-classifier
+    volumes:
+      # Mount the trained model from the host
+      - ../tool_classifier/data:/app/data
+    ports:
+      - "5050:5050"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
   # ToolSandbox — benchmark runner
   # ---------------------------------------------------------------------------
   toolsandbox:
@@ -83,6 +106,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      classifier:
+        condition: service_healthy
     environment:
       OLLAMA_HOST: "http://ollama:11434"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
@@ -90,6 +115,7 @@ services:
       PARALLEL: "${PARALLEL:-1}"
       OUTPUT_DIR: "/app/data"
       OPENAI_API_KEY: "unused"
+      AGENT_CONFIG: "${AGENT_CONFIG:-}"
     volumes:
       # Mount the results directory back to the host
       - ./data:/app/data

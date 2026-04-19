@@ -102,6 +102,7 @@ from tool_sandbox.roles.tool_filter import (
     DenyListToolFilter,
     KeywordToolFilter,
     LLMClassifierToolFilter,
+    MLClassifierToolFilter,
     ToolFilter,
 )
 from tool_sandbox.roles.tool_filtered_agent import ToolFilteredAgent
@@ -156,6 +157,14 @@ def _build_tool_filter(config: dict[str, Any]) -> ToolFilter:
             base_url=config.get("base_url"),
             max_tools=config.get("max_tools"),
             always_include=config.get("always_include"),
+        )
+
+    if filter_type == "ml_classifier":
+        return MLClassifierToolFilter(
+            endpoint_url=config.get("endpoint_url", "http://localhost:5050/predict"),
+            threshold=config.get("threshold", 0.5),
+            always_include=config.get("always_include"),
+            timeout=config.get("timeout", 10.0),
         )
 
     if filter_type == "composite":

@@ -1,0 +1,11 @@
+{
+    "type": "tool_filtered",
+    "inner_agent": "Ollama",
+    "tool_filter": {
+        "type": "ml_classifier",
+        "endpoint_url": "http://classifier:5050/predict",
+        "threshold": 0.4,
+        "always_include": ["get_current_timestamp"],
+        "timeout": 15.0
+    }
+}

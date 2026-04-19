@@ -291,6 +291,116 @@ class LLMClassifierToolFilter(ToolFilter):
         }
 
 
+class MLClassifierToolFilter(ToolFilter):
+    """Use a trained ML binary classifier to predict tool relevance.
+
+    For each (user_message, tool_name) pair the classifier produces a
+    probability that the tool is relevant.  Tools whose score exceeds
+    ``threshold`` are kept.
+
+    The classifier is queried via an HTTP endpoint that accepts a JSON body::
+
+        POST /predict
+        {
+            "user_message": "Turn off wifi",
+            "tool_names": ["set_wifi_status", "search_contacts", ...],
+            "tool_descriptions": ["Toggle the WiFi ...", "Search for ...", ...]
+        }
+
+    and returns::
+
+        {"scores": [0.95, 0.02, ...]}
+
+    This decoupling means the classifier can be a separate micro-service
+    (PyTorch, TensorFlow, scikit-learn, etc.) running in its own container.
+
+    Args:
+        endpoint_url:   Full URL of the ``/predict`` endpoint.
+        threshold:      Minimum score to keep a tool (default: 0.5).
+        always_include: Tool names that bypass the classifier.
+        timeout:        HTTP request timeout in seconds.
+    """
+
+    def __init__(
+        self,
+        endpoint_url: str = "http://localhost:5050/predict",
+        threshold: float = 0.5,
+        always_include: Optional[Sequence[str]] = None,
+        timeout: float = 10.0,
+    ) -> None:
+        self.endpoint_url = endpoint_url
+        self.threshold = threshold
+        self.always_include: set[str] = set(always_include or [])
+        self.timeout = timeout
+
+    def filter_tools(
+        self,
+        tools: dict[str, Callable[..., Any]],
+        messages: list[Message],
+    ) -> dict[str, Callable[..., Any]]:
+        if not tools:
+            return tools
+
+        # Extract the most recent user message
+        last_user_content = ""
+        for msg in reversed(messages):
+            if msg.sender is not None and msg.sender == RoleType.USER:
+                last_user_content = msg.content or ""
+                break
+
+        # Build tool names and short descriptions
+        tool_names: list[str] = []
+        tool_descriptions: list[str] = []
+        for name, tool in tools.items():
+            tool_names.append(name)
+            doc = (getattr(tool, "__doc__", None) or "").split("\n")[0]
+            tool_descriptions.append(doc)
+
+        payload = json.dumps(
+            {
+                "user_message": last_user_content,
+                "tool_names": tool_names,
+                "tool_descriptions": tool_descriptions,
+            }
+        ).encode("utf-8")
+
+        import urllib.request
+        import urllib.error
+
+        req = urllib.request.Request(
+            self.endpoint_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(
+                req, timeout=self.timeout
+            ) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            scores: list[float] = body["scores"]
+        except Exception:
+            LOGGER.warning(
+                "ML classifier request failed; falling back to all tools.",
+                exc_info=True,
+            )
+            return tools
+
+        # Select tools that pass the threshold or are always-included
+        selected: dict[str, Callable[..., Any]] = {}
+        for name, score in zip(tool_names, scores):
+            if score >= self.threshold or name in self.always_include:
+                selected[name] = tools[name]
+
+        # Ensure always_include tools are present even if they weren't scored
+        for name in self.always_include:
+            if name in tools and name not in selected:
+                selected[name] = tools[name]
+
+        return selected
+
+
 class CompositeToolFilter(ToolFilter):
     """Chain multiple filters in sequence (logical AND / pipeline).
 

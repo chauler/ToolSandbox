@@ -12,6 +12,9 @@ SCENARIOS            Space-separated scenario names, or "all" / "test"
                      (default: test)
 PARALLEL             Number of parallel workers (default: 1)
 OUTPUT_DIR           Where to write results (default: /app/data)
+AGENT_CONFIG         Path to agent config JSON inside the container.
+                     When set, --agent_config is passed instead of --agent.
+                     (default: empty — uses --agent Ollama)
 """
 
 import os
@@ -27,6 +30,7 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
 SCENARIOS = os.environ.get("SCENARIOS", "test")
 PARALLEL = os.environ.get("PARALLEL", "1")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/app/data")
+AGENT_CONFIG = os.environ.get("AGENT_CONFIG", "")
 
 # Expose the Ollama endpoint to the openai library used by OllamaAgent/User
 os.environ["OLLAMA_BASE_URL"] = f"{OLLAMA_HOST}/v1"
@@ -92,6 +96,16 @@ def run_benchmark() -> None:
         "-p", PARALLEL,
         "-o", OUTPUT_DIR,
     ]
+
+    # If an agent config is specified, use --agent_config instead of --agent
+    if AGENT_CONFIG:
+        cmd = [
+            "tool_sandbox",
+            "--user", "Ollama",
+            "--agent_config", AGENT_CONFIG,
+            "-p", PARALLEL,
+            "-o", OUTPUT_DIR,
+        ]
 
     if SCENARIOS == "all":
         pass  # no --scenario flag means all

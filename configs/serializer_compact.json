@@ -1,0 +1,10 @@
+{
+    "type": "tool_serialized",
+    "inner_agent": "Ollama",
+    "tool_serializer": {
+        "type": "compact_description",
+        "max_tool_desc_length": 120,
+        "max_param_desc_length": 80,
+        "ellipsis_marker": "..."
+    }
+}
