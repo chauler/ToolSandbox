@@ -1,0 +1,7 @@
+{
+    "type": "tool_serialized",
+    "inner_agent": "Ollama",
+    "tool_serializer": {
+        "type": "identity"
+    }
+}

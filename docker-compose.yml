@@ -67,13 +67,13 @@ services:
       retries: 120
       start_period: 15s
     # Uncomment the following for GPU acceleration (requires NVIDIA Container Toolkit):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
   # ML Classifier — tool-relevance prediction micro-service
