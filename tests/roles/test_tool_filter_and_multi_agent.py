@@ -20,6 +20,8 @@ from tool_sandbox.roles.multi_agent import (
     KeywordRouter,
     MultiAgentRole,
     RoundRobinRouter,
+    SemanticKernelToolFilterMultiAgent,
+    SemanticKernelToolSelectorAgent,
     ToolBasedRouter,
 )
 from tool_sandbox.roles.tool_filter import (
@@ -358,6 +360,62 @@ class TestMultiAgentRole:
         inner_b.teardown.assert_called_once()
 
 
+class _FixedSelector:
+    """Deterministic selector used for testing SK wrapper behavior."""
+
+    def __init__(self, selected: list[str]) -> None:
+        self.selected = selected
+        self.model_name = "test-selector"
+        self.top_fraction = 0.5
+
+    def select_tool_names(
+        self,
+        messages: list[Message],
+        tools: dict[str, Callable[..., Any]],
+    ) -> set[str]:
+        _ = messages
+        return {name for name in self.selected if name in tools}
+
+
+class TestSemanticKernelToolFilterMultiAgent:
+    def test_delegates_to_execution_agent(self) -> None:
+        ctx = get_current_context()
+        ctx.add_to_database(
+            namespace=DatabaseNamespace.SANDBOX,
+            rows=[
+                {
+                    "sender": RoleType.USER,
+                    "recipient": RoleType.AGENT,
+                    "content": "Hello",
+                }
+            ],
+        )
+
+        execution_agent = MagicMock(spec=BaseRole)
+        selector = _FixedSelector(["search_contacts", "end_conversation"])
+        wrapper = SemanticKernelToolFilterMultiAgent(
+            execution_agent=execution_agent,
+            selector_agent=selector,
+        )
+        wrapper.respond()
+        execution_agent.respond.assert_called_once()
+
+    def test_selector_agent_rejects_invalid_top_fraction(self) -> None:
+        with pytest.raises(ValueError, match="top_fraction"):
+            SemanticKernelToolSelectorAgent(top_fraction=0.0)
+
+    def test_model_name_contains_selector_and_executor(self) -> None:
+        execution_agent = MagicMock(spec=BaseRole)
+        execution_agent.model_name = "gpt-executor"
+        selector = _FixedSelector(["search_contacts"])
+        wrapper = SemanticKernelToolFilterMultiAgent(
+            execution_agent=execution_agent,
+            selector_agent=selector,
+        )
+        assert "sk_tool_filter_multi_agent" in wrapper.model_name
+        assert "gpt-executor" in wrapper.model_name
+
+
 # ---------------------------------------------------------------------------
 # Agent config loading
 # ---------------------------------------------------------------------------
@@ -445,3 +503,18 @@ class TestAgentConfig:
         config = {"type": "Unhelpful"}
         agent = build_agent_from_config(config)
         assert isinstance(agent, BaseRole)
+
+    def test_build_semantic_kernel_tool_filter_multi_agent(self) -> None:
+        from tool_sandbox.cli.agent_config import build_agent_from_config
+
+        config = {
+            "type": "semantic_kernel_tool_filter_multi_agent",
+            "execution_agent": {"type": "Unhelpful"},
+            "selector": {
+                "model_name": "gpt-4o-mini",
+                "top_fraction": 0.25,
+                "fallback_to_all": True,
+            },
+        }
+        agent = build_agent_from_config(config)
+        assert isinstance(agent, SemanticKernelToolFilterMultiAgent)

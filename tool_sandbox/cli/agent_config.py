@@ -94,6 +94,8 @@ from tool_sandbox.roles.multi_agent import (
     LLMRouter,
     MultiAgentRole,
     RoundRobinRouter,
+    SemanticKernelToolFilterMultiAgent,
+    SemanticKernelToolSelectorAgent,
     ToolBasedRouter,
 )
 from tool_sandbox.roles.tool_filter import (
@@ -318,6 +320,30 @@ def build_agent_from_config(config: dict[str, Any]) -> BaseRole:
                 agents[name] = build_agent_from_config(agent_cfg)
         router = _build_router(config["router"])
         return MultiAgentRole(agents=agents, router=router)
+
+    # --- Semantic-Kernel tool-filter multi-agent ---
+    if agent_type == "semantic_kernel_tool_filter_multi_agent":
+        execution_cfg = config["execution_agent"]
+        if isinstance(execution_cfg, str):
+            execution_agent = _build_simple_agent(execution_cfg)
+        else:
+            execution_agent = build_agent_from_config(execution_cfg)
+
+        selector_cfg = config.get("selector", {})
+        selector_agent = SemanticKernelToolSelectorAgent(
+            model_name=selector_cfg.get("model_name", "gpt-4o-mini"),
+            top_fraction=selector_cfg.get("top_fraction", 0.3),
+            min_tools=selector_cfg.get("min_tools", 1),
+            max_tools=selector_cfg.get("max_tools"),
+            always_include=selector_cfg.get("always_include"),
+            api_key=selector_cfg.get("api_key"),
+            base_url=selector_cfg.get("base_url"),
+            fallback_to_all=selector_cfg.get("fallback_to_all", True),
+        )
+        return SemanticKernelToolFilterMultiAgent(
+            execution_agent=execution_agent,
+            selector_agent=selector_agent,
+        )
 
     if agent_type == "agent_framework":
         inner_config = config["inner_agent"]

@@ -1,0 +1,14 @@
+{
+  "type": "semantic_kernel_tool_filter_multi_agent",
+  "execution_agent": {
+    "type": "Ollama"
+  },
+  "selector": {
+    "model_name": "qwen2.5:3b",
+    "base_url": "http://localhost:11434/v1",
+    "top_fraction": 0.3,
+    "min_tools": 1,
+    "always_include": ["end_conversation"],
+    "fallback_to_all": true
+  }
+}

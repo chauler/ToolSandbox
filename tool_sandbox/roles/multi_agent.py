@@ -271,6 +271,248 @@ class ToolBasedRouter(AgentRouter):
 # Multi-agent role
 # ---------------------------------------------------------------------------
 
+class _MutableAllowListToolFilter:
+    """Private mutable allow-list filter used by SK tool selection."""
+
+    def __init__(self, allowed_tool_names: Optional[Sequence[str]] = None) -> None:
+        self.allowed_tool_names: set[str] = set(allowed_tool_names or [])
+
+    def filter_tools(
+        self,
+        tools: dict[str, Callable[..., Any]],
+        messages: list[Message],
+    ) -> dict[str, Callable[..., Any]]:
+        _ = messages
+        if not self.allowed_tool_names:
+            return tools
+        return {
+            name: tool
+            for name, tool in tools.items()
+            if name in self.allowed_tool_names
+        }
+
+
+class SemanticKernelToolSelectorAgent:
+    """Selector sub-agent that uses Semantic Kernel to rank tools."""
+
+    def __init__(
+        self,
+        model_name: str = "gpt-4o-mini",
+        top_fraction: float = 0.3,
+        min_tools: int = 1,
+        max_tools: Optional[int] = None,
+        always_include: Optional[Sequence[str]] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        fallback_to_all: bool = True,
+    ) -> None:
+        if top_fraction <= 0 or top_fraction > 1:
+            raise ValueError("top_fraction must be in (0, 1].")
+        if min_tools < 1:
+            raise ValueError("min_tools must be >= 1.")
+        self.model_name = model_name
+        self.top_fraction = top_fraction
+        self.min_tools = min_tools
+        self.max_tools = max_tools
+        self.always_include: set[str] = set(always_include or [])
+        self.api_key = api_key
+        self.base_url = base_url
+        self.fallback_to_all = fallback_to_all
+        self._kernel = None
+
+    def _init_kernel(self) -> Any:
+        if self._kernel is not None:
+            return self._kernel
+
+        try:
+            import importlib
+
+            sk_module = importlib.import_module("semantic_kernel")
+            sk_openai_module = importlib.import_module(
+                "semantic_kernel.connectors.ai.open_ai"
+            )
+            openai_module = importlib.import_module("openai")
+            Kernel = getattr(sk_module, "Kernel")
+            OpenAIChatCompletion = getattr(sk_openai_module, "OpenAIChatCompletion")
+            AsyncOpenAI = getattr(openai_module, "AsyncOpenAI")
+        except Exception as exc:
+            raise RuntimeError(
+                "Semantic Kernel is required for SemanticKernelToolSelectorAgent. "
+                "Install dependency: semantic-kernel and use an OpenAI package "
+                "version compatible with Semantic Kernel (for this project, "
+                "Python >=3.10 uses openai==1.109.1)."
+            ) from exc
+
+        kernel = Kernel()
+        service_kwargs: dict[str, Any] = {
+            "service_id": "tool_selector",
+            "ai_model_id": self.model_name,
+        }
+        if self.base_url is not None:
+            async_client_kwargs: dict[str, Any] = {"base_url": self.base_url}
+            if self.api_key is not None:
+                async_client_kwargs["api_key"] = self.api_key
+            service_kwargs["async_client"] = AsyncOpenAI(**async_client_kwargs)
+        elif self.api_key is not None:
+            service_kwargs["api_key"] = self.api_key
+        kernel.add_service(OpenAIChatCompletion(**service_kwargs))
+        self._kernel = kernel
+        return kernel
+
+    @staticmethod
+    def _parse_json_array(content: str) -> list[str]:
+        text = content.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        parsed = json.loads(text)
+        if not isinstance(parsed, list):
+            raise ValueError("Expected JSON list from selector model")
+        return [str(x) for x in parsed]
+
+    def _build_prompt(
+        self,
+        messages: list[Message],
+        tool_names: list[str],
+        tool_descriptions: list[str],
+        top_k: int,
+    ) -> str:
+        recent_messages = messages[-6:] if len(messages) > 6 else messages
+        conversation_parts: list[str] = []
+        for msg in recent_messages:
+            sender = msg.sender.value if msg.sender else "unknown"
+            conversation_parts.append(f"[{sender}] {(msg.content or '')[:600]}")
+        conversation = "\n".join(conversation_parts)
+
+        tool_lines = [
+            f"- {name}: {desc}"
+            for name, desc in zip(tool_names, tool_descriptions)
+        ]
+        tools_str = "\n".join(tool_lines)
+
+        return (
+            "You are a tool filtering agent in a two-agent architecture. "
+            "Given conversation context and available tools, select the most "
+            f"relevant tool names for the execution agent. Select at most {top_k} "
+            "tools. Return ONLY a JSON array of tool names.\n\n"
+            f"Conversation:\n{conversation}\n\n"
+            f"Available tools:\n{tools_str}\n\n"
+            "Selected tool names (JSON array):"
+        )
+
+    def _invoke_prompt(self, prompt: str) -> str:
+        import asyncio
+
+        kernel = self._init_kernel()
+
+        async def _run() -> str:
+            result = await kernel.invoke_prompt(prompt)
+            return str(result)
+
+        return asyncio.run(_run())
+
+    def select_tool_names(
+        self,
+        messages: list[Message],
+        tools: dict[str, Callable[..., Any]],
+    ) -> set[str]:
+        if not tools:
+            return set()
+
+        tool_names = list(tools.keys())
+        tool_descriptions = [
+            (getattr(tool, "__doc__", None) or "").split("\n")[0]
+            for tool in tools.values()
+        ]
+
+        top_k = max(self.min_tools, int(len(tool_names) * self.top_fraction + 0.9999))
+        if self.max_tools is not None:
+            top_k = min(top_k, self.max_tools)
+        top_k = max(1, min(top_k, len(tool_names)))
+
+        prompt = self._build_prompt(messages, tool_names, tool_descriptions, top_k)
+        try:
+            raw = self._invoke_prompt(prompt)
+            selected_ordered = self._parse_json_array(raw)
+            selected = [name for name in selected_ordered if name in tools]
+            if len(selected) < top_k:
+                for name in tool_names:
+                    if name not in selected:
+                        selected.append(name)
+                    if len(selected) >= top_k:
+                        break
+            selected = selected[:top_k]
+            selected_set = set(selected) | {n for n in self.always_include if n in tools}
+            return selected_set
+        except Exception:
+            LOGGER.warning(
+                "Semantic Kernel tool selection failed; falling back to %s.",
+                "all tools" if self.fallback_to_all else f"top {top_k} tools",
+                exc_info=True,
+            )
+            if self.fallback_to_all:
+                return set(tool_names)
+            return set(tool_names[:top_k])
+
+
+class SemanticKernelToolFilterMultiAgent(BaseRole):
+    """Two-agent architecture: SK selector sub-agent + execution agent."""
+
+    role_type: RoleType = RoleType.AGENT
+
+    def __init__(
+        self,
+        execution_agent: BaseRole,
+        selector_agent: SemanticKernelToolSelectorAgent,
+    ) -> None:
+        self.execution_agent = execution_agent
+        self.selector_agent = selector_agent
+        self._dynamic_filter = _MutableAllowListToolFilter()
+
+        existing_filter = getattr(self.execution_agent, "_tool_filter", None)
+        if existing_filter is None:
+            self.execution_agent._tool_filter = self._dynamic_filter
+        else:
+            from tool_sandbox.roles.tool_filter import CompositeToolFilter
+
+            self.execution_agent._tool_filter = CompositeToolFilter(
+                [existing_filter, self._dynamic_filter]
+            )
+
+    @property
+    def model_name(self) -> str:  # type: ignore[override]
+        base_name = getattr(self.execution_agent, "model_name", "unknown")
+        return (
+            f"sk_tool_filter_multi_agent("
+            f"selector={self.selector_agent.model_name},"
+            f"executor={base_name},"
+            f"top_fraction={self.selector_agent.top_fraction}"
+            f")"
+        )
+
+    def respond(self, ending_index: Optional[int] = None) -> None:
+        messages = self.get_messages(ending_index=ending_index)
+        available_tools = BaseRole.get_available_tools(self)
+        selected_tool_names = self.selector_agent.select_tool_names(
+            messages=messages,
+            tools=available_tools,
+        )
+        self._dynamic_filter.allowed_tool_names = selected_tool_names
+        LOGGER.info(
+            "SemanticKernelToolFilterMultiAgent selected %d/%d tools.",
+            len(selected_tool_names),
+            len(available_tools),
+        )
+        self.execution_agent.respond(ending_index=ending_index)
+
+    def reset(self) -> None:
+        self.execution_agent.reset()
+
+    def teardown(self) -> None:
+        self.execution_agent.teardown()
+
+    def get_available_tools(self) -> dict[str, Callable[..., Any]]:
+        return self.execution_agent.get_available_tools()
+
 
 class MultiAgentRole(BaseRole):
     """Orchestrates multiple sub-agents as a single ``AGENT`` role.
